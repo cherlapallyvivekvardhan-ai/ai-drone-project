@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
+
+<title>AI Drone Mission Platform</title>
+
+<style>
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #101827;
+    color: white;
+}
+
+header {
+    padding: 20px;
+    background: #172238;
+    border-bottom: 1px solid #334155;
+}
+
+header h1 {
+    margin: 0;
+}
+
+.layout {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    min-height: calc(100vh - 80px);
+}
+
+.sidebar {
+    padding: 20px;
+    background: #111c30;
+}
+
+.control {
+    margin-bottom: 18px;
+}
+
+label {
+    display: block;
+    margin-bottom: 7px;
+}
+
+input,
+select,
+button {
+    width: 100%;
+    padding: 11px;
+    border-radius: 7px;
+    border: none;
+}
+
+input,
+select {
+    background: #26344d;
+    color: white;
+}
+
+button {
+    margin-top: 10px;
+    background: #2563eb;
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+button:hover {
+    background: #1d4ed8;
+}
+
+.map-area {
+    padding: 20px;
+}
+
+#map {
+    width: 100%;
+    height: 600px;
+    background:
+        linear-gradient(
+            rgba(255,255,255,0.05) 1px,
+            transparent 1px
+        ),
+        linear-gradient(
+            90deg,
+            rgba(255,255,255,0.05) 1px,
+            transparent 1px
+        );
+    background-size: 20px 20px;
+    border: 2px solid #334155;
+    position: relative;
+    overflow: hidden;
+}
+
+.point {
+    position: absolute;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.start {
+    background: #22c55e;
+}
+
+.destination {
+    background: #ef4444;
+}
+
+.obstacle {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    background: #f59e0b;
+}
+
+.route-line {
+    position: absolute;
+    height: 4px;
+    background: #38bdf8;
+    transform-origin: left center;
+}
+
+.info-panel {
+    display: grid;
+    grid-template-columns:
+        repeat(4, 1fr);
+    gap: 10px;
+    margin-top: 15px;
+}
+
+.card {
+    background: #172238;
+    padding: 15px;
+    border-radius: 8px;
+}
+
+.card small {
+    color: #94a3b8;
+}
+
+.card strong {
+    display: block;
+    font-size: 20px;
+    margin-top: 5px;
+}
+
+.status {
+    margin-top: 15px;
+    padding: 12px;
+    background: #172238;
+    border-radius: 7px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<header>
+
+<h1>🚁 AI-Based Delivery Drone Path Planning System</h1>
+
+<p>
+AI Mission Planning • Obstacle Avoidance • Route Optimization
+</p>
+
+</header>
+
+
+<div class="layout">
+
+
+<div class="sidebar">
+
+<h2>Mission Setup</h2>
+
+
+<div class="control">
+
+<label>Start X</label>
+
+<input id="startX"
+       type="number"
+       value="2">
+
+</div>
+
+
+<div class="control">
+
+<label>Start Y</label>
+
+<input id="startY"
+       type="number"
+       value="2">
+
+</div>
+
+
+<div class="control">
+
+<label>Destination X</label>
+
+<input id="endX"
+       type="number"
+       value="45">
+
+</div>
+
+
+<div class="control">
+
+<label>Destination Y</label>
+
+<input id="endY"
+       type="number"
+       value="45">
+
+</div>
+
+
+<div class="control">
+
+<label>Drone Speed</label>
+
+<input id="speed"
+       type="number"
+       value="10">
+
+</div>
+
+
+<div class="control">
+
+<label>AI Algorithm</label>
+
+<select id="algorithm">
+
+<option value="astar">
+A* AI Path Planning
+</option>
+
+<option value="dijkstra">
+Dijkstra Baseline
+</option>
+
+</select>
+
+</div>
+
+
+<button onclick="loadZones()">
+Load Map Obstacles
+</button>
+
+<button onclick="planMission()">
+🚀 Plan Drone Route
+</button>
+
+
+<div class="status"
+     id="status">
+
+Ready for mission.
+
+</div>
+
+</div>
+
+
+<div class="map-area">
+
+<div id="map"></div>
+
+
+<div class="info-panel">
+
+<div class="card">
+
+<small>Algorithm</small>
+
+<strong id="algorithmResult">
+-
+</strong>
+
+</div>
+
+
+<div class="card">
+
+<small>Distance</small>
+
+<strong id="distance">
+-
+</strong>
+
+</div>
+
+
+<div class="card">
+
+<small>Flight Time</small>
+
+<strong id="time">
+-
+</strong>
+
+</div>
+
+
+<div class="card">
+
+<small>Waypoints</small>
+
+<strong id="waypoints">
+-
+</strong>
+
+</div>
+
+</div>
+
+</div>
+
+</div>
+
+
+<script>
+
+let obstacles = [];
+
+
+const map = document.getElementById("map");
+
+
+function clearMap() {
+
+    map.innerHTML = "";
+
+}
+
+
+function convertPoint(point) {
+
+    const width = 50;
+    const height = 50;
+
+    return {
+        x: (point.x / width) * map.clientWidth,
+        y: (point.y / height) * map.clientHeight
+    };
+
+}
+
+
+function drawPoint(point, className) {
+
+    const position =
+        convertPoint(point);
+
+    const element =
+        document.createElement("div");
+
+    element.className =
+        "point " + className;
+
+    element.style.left =
+        position.x + "px";
+
+    element.style.top =
+        position.y + "px";
+
+    map.appendChild(element);
+
+}
+
+
+function drawObstacle(obstacle) {
+
+    const position =
+        convertPoint(obstacle);
+
+    const element =
+        document.createElement("div");
+
+    element.className =
+        "obstacle";
+
+    element.style.left =
+        position.x + "px";
+
+    element.style.top =
+        position.y + "px";
+
+    map.appendChild(element);
+
+}
+
+
+function drawRoute(route) {
+
+    for (let i = 0;
+         i < route.length - 1;
+         i++) {
+
+        const a =
+            convertPoint(route[i]);
+
+        const b =
+            convertPoint(route[i + 1]);
+
+        const dx =
+            b.x - a.x;
+
+        const dy =
+            b.y - a.y;
+
+        const length =
+            Math.sqrt(
+                dx * dx + dy * dy
+            );
+
+        const angle =
+            Math.atan2(dy, dx)
+            * 180 / Math.PI;
+
+        const line =
+            document.createElement("div");
+
+        line.className =
+            "route-line";
+
+        line.style.left =
+            a.x + "px";
+
+        line.style.top =
+            a.y + "px";
+
+        line.style.width =
+            length + "px";
+
+        line.style.transform =
+            `rotate(${angle}deg)`;
+
+        map.appendChild(line);
+    }
+
+}
+
+
+async function loadZones() {
+
+    const response =
+        await fetch(
+            "/api/default-zones"
+        );
+
+    const data =
+        await response.json();
+
+    obstacles =
+        data.obstacles;
+
+    clearMap();
+
+    obstacles.forEach(
+        drawObstacle
+    );
+
+    document.getElementById("status")
+        .innerText =
+        `${obstacles.length} obstacle points loaded.`;
+
+}
+
+
+async function planMission() {
+
+    const start = {
+
+        x: Number(
+            document.getElementById("startX").value
+        ),
+
+        y: Number(
+            document.getElementById("startY").value
+        )
+
+    };
+
+
+    const destination = {
+
+        x: Number(
+            document.getElementById("endX").value
+        ),
+
+        y: Number(
+            document.getElementById("endY").value
+        )
+
+    };
+
+
+    const speed =
+        Number(
+            document.getElementById("speed").value
+        );
+
+
+    const algorithm =
+        document.getElementById(
+            "algorithm"
+        ).value;
+
+
+    document.getElementById("status")
+        .innerText =
+        "AI calculating route...";
+
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/plan-route",
+                {
+
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body: JSON.stringify({
+
+                        start:
+                            start,
+
+                        destination:
+                            destination,
+
+                        obstacles:
+                            obstacles,
+
+                        algorithm:
+                            algorithm,
+
+                        drone_speed:
+                            speed
+
+                    })
+
+                }
+            );
+
+
+        const result =
+            await response.json();
+
+
+        if (!result.success) {
+
+            throw new Error(
+                result.error
+            );
+
+        }
+
+
+        clearMap();
+
+
+        obstacles.forEach(
+            drawObstacle
+        );
+
+
+        drawPoint(
+            start,
+            "start"
+        );
+
+
+        drawPoint(
+            destination,
+            "destination"
+        );
+
+
+        drawRoute(
+            result.route
+        );
+
+
+        document.getElementById(
+            "algorithmResult"
+        ).innerText =
+            result.algorithm;
+
+
+        document.getElementById(
+            "distance"
+        ).innerText =
+            result.distance;
+
+
+        document.getElementById(
+            "time"
+        ).innerText =
+            result.flight_time +
+            " sec";
+
+
+        document.getElementById(
+            "waypoints"
+        ).innerText =
+            result.waypoints;
+
+
+        document.getElementById(
+            "status"
+        ).innerText =
+            "✅ Route successfully generated.";
+
+    }
+
+    catch(error) {
+
+        document.getElementById(
+            "status"
+        ).innerText =
+            "❌ " + error.message;
+
+    }
+
+}
+
+
+loadZones();
+
+</script>
+
+</body>
+
+</html>
