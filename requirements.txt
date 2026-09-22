@@ -1,0 +1,3 @@
+# Core pipeline (main.py) uses ONLY the Python standard library.
+# matplotlib is optional -- only needed for `python main.py --plot`.
+matplotlib>=3.7

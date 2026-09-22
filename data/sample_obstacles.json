@@ -1,0 +1,7 @@
+{
+  "no_fly_zones": [
+    { "name": "Airport-Restricted", "center": [25, 22], "radius_cells": 4 },
+    { "name": "Stadium-Event", "center": [8, 8], "radius_cells": 3 },
+    { "name": "Military-Zone", "center": [33, 15], "radius_cells": 3.5 }
+  ]
+}
