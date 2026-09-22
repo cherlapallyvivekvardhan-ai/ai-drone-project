@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: drone_db
+    restart: always
+    environment:
+      POSTGRES_USER: drone_user
+      POSTGRES_PASSWORD: drone_password
+      POSTGRES_DB: drone_routing_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    container_name: drone_backend
+    restart: always
+    environment:
+      FRONTEND_URL: http://localhost:5173
+      DATABASE_URL: postgresql://drone_user:drone_password@db:5432/drone_routing_db
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
