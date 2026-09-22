@@ -1,0 +1,48 @@
+{
+  "zones": [
+    {
+      "id": "building-a",
+      "name": "Building A",
+      "type": "obstacle",
+      "min_x": 90,
+      "max_x": 170,
+      "min_y": 100,
+      "max_y": 210,
+      "min_z": 0,
+      "max_z": 50
+    },
+    {
+      "id": "restricted-1",
+      "name": "Restricted Airspace",
+      "type": "no-fly",
+      "min_x": 210,
+      "max_x": 280,
+      "min_y": 190,
+      "max_y": 300,
+      "min_z": 0,
+      "max_z": 90
+    },
+    {
+      "id": "tower",
+      "name": "Communication Tower",
+      "type": "obstacle",
+      "min_x": 120,
+      "max_x": 150,
+      "min_y": 270,
+      "max_y": 310,
+      "min_z": 0,
+      "max_z": 120
+    },
+    {
+      "id": "building-b",
+      "name": "Building B",
+      "type": "obstacle",
+      "min_x": 300,
+      "max_x": 380,
+      "min_y": 70,
+      "max_y": 170,
+      "min_z": 0,
+      "max_z": 70
+    }
+  ]
+}
