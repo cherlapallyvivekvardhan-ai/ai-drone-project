@@ -1,8 +1,8 @@
 """
 app.py
 Streamlit front-end for the AI Delivery Drone Path Planning simulation,
-using a real interactive map for start/goal selection and a 3D map view
-for the resulting flight path.
+using a real interactive map for start/goal selection and a true 3D map
+(extruded buildings, tilted route with altitude drop-lines) for results.
 
 Run with:
     streamlit run app.py
@@ -20,9 +20,30 @@ from environment import AirspaceEnvironment, DynamicObstacle
 from heuristics import MultiFactorHeuristic, DronePhysicsModel
 from planner import AStar3DPlanner, ReactiveMicroAdjuster
 
-st.set_page_config(page_title="Drone Path Planning", layout="wide")
-st.title("AI Delivery Drone Path Planning Simulation")
-st.caption("Click the map to place a Start and Goal point, then run the 3D A* + reactive-avoidance planner.")
+st.set_page_config(page_title="Drone Path Planning", page_icon="🚁", layout="wide")
+
+st.markdown(
+    """
+    <style>
+    .hero {
+        padding: 1.1rem 1.4rem; border-radius: 14px;
+        background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
+        color: #ffffff; margin-bottom: 1.2rem;
+    }
+    .hero h1 { margin: 0; font-size: 1.6rem; }
+    .hero p { margin: 0.3rem 0 0 0; opacity: 0.85; font-size: 0.95rem; }
+    .legend-dot {
+        display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+        margin-right: 6px; vertical-align: middle;
+    }
+    </style>
+    <div class="hero">
+        <h1>🚁 AI Delivery Drone Path Planning</h1>
+        <p>Click a real map to set Start &amp; Goal, then fly a 3D A* route with reactive obstacle avoidance — buildings, no-fly zones and altitude are all rendered in true 3D.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 EARTH_R = 6371000.0  # meters
 
@@ -35,9 +56,6 @@ st.session_state.setdefault("mode", "Start")
 st.session_state.setdefault("last_click_id", None)
 
 
-# ---------------------------------------------------------------------------
-# Coordinate conversion (equirectangular local ENU, fine for city-scale spans)
-# ---------------------------------------------------------------------------
 def latlon_to_local(lat, lon, lat0, lon0):
     dx = math.radians(lon - lon0) * EARTH_R * math.cos(math.radians(lat0))
     dy = math.radians(lat - lat0) * EARTH_R
@@ -54,64 +72,67 @@ def local_to_latlon(dx, dy, lat0, lon0):
 # Sidebar controls
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.header("Point Selection")
-    st.radio("Clicking the map sets:", ["Start", "Goal"], key="mode")
+    st.header("✈️ Point Selection")
+    st.radio("Clicking the map sets:", ["Start", "Goal"], key="mode", horizontal=True)
     c1, c2 = st.columns(2)
-    if c1.button("Reset Start"):
+    if c1.button("Reset Start", use_container_width=True):
         st.session_state.start_latlon = None
-    if c2.button("Reset Goal"):
+    if c2.button("Reset Goal", use_container_width=True):
         st.session_state.goal_latlon = None
 
+    with st.expander("🛫 Altitudes (meters)", expanded=True):
+        start_alt = st.slider("Start altitude", 0, 200, 10, 5)
+        goal_alt = st.slider("Goal altitude", 0, 200, 30, 5)
+
+    with st.expander("🔋 Drone Physics & Wind"):
+        base_weight = st.slider("Base weight (kg)", 0.5, 10.0, 3.5, 0.5)
+        payload_weight = st.slider("Payload weight (kg)", 0.0, 10.0, 2.0, 0.5)
+        wx = st.slider("Wind X (m/s)", -5.0, 5.0, -2.0, 0.5)
+        wy = st.slider("Wind Y (m/s)", -5.0, 5.0, 1.5, 0.5)
+        wz = st.slider("Wind Z (m/s)", -5.0, 5.0, 0.0, 0.5)
+
+    with st.expander("🧭 Heuristic Weights"):
+        w_dist = st.slider("Distance weight", 0.0, 5.0, 1.0, 0.1)
+        w_energy = st.slider("Energy weight", 0.0, 5.0, 1.8, 0.1)
+        w_risk = st.slider("Risk weight", 0.0, 5.0, 3.0, 0.1)
+
+    with st.expander("🏢 Obstacles", expanded=True):
+        add_obstacles = st.checkbox("Add sample buildings / no-fly zone / moving obstacles", value=True)
+
     st.divider()
-    st.header("Flight Altitudes (meters)")
-    start_alt = st.slider("Start altitude", 0, 200, 10, 5)
-    goal_alt = st.slider("Goal altitude", 0, 200, 30, 5)
-
-    st.header("Drone Physics")
-    base_weight = st.slider("Base weight (kg)", 0.5, 10.0, 3.5, 0.5)
-    payload_weight = st.slider("Payload weight (kg)", 0.0, 10.0, 2.0, 0.5)
-
-    st.header("Wind (m/s)")
-    wx = st.slider("Wind X", -5.0, 5.0, -2.0, 0.5)
-    wy = st.slider("Wind Y", -5.0, 5.0, 1.5, 0.5)
-    wz = st.slider("Wind Z", -5.0, 5.0, 0.0, 0.5)
-
-    st.header("Heuristic Weights")
-    w_dist = st.slider("Distance weight", 0.0, 5.0, 1.0, 0.1)
-    w_energy = st.slider("Energy weight", 0.0, 5.0, 1.8, 0.1)
-    w_risk = st.slider("Risk weight", 0.0, 5.0, 3.0, 0.1)
-
-    st.header("Obstacles")
-    add_obstacles = st.checkbox("Add sample buildings / no-fly zone / moving obstacles along route", value=True)
-
-    run_button = st.button("Run Simulation", type="primary", use_container_width=True)
+    run_button = st.button("🚀 Run Simulation", type="primary", use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
-# Step 1: click-to-place map
+# Step 1: click-to-place map + status checklist
 # ---------------------------------------------------------------------------
-st.subheader("1. Pick Start and Goal on the map")
-st.write(f"Current mode: **{st.session_state.mode}** — click the map to set that point.")
+st.subheader("1️⃣ Pick Start and Goal on the map")
 
-center = [17.3850, 78.4867]  # default view (Hyderabad)
+status1, status2 = st.columns(2)
+if st.session_state.start_latlon:
+    status1.success(f"✅ Start set — {st.session_state.start_latlon[0]:.5f}, {st.session_state.start_latlon[1]:.5f}")
+else:
+    status1.warning("⬜ Start not set")
+if st.session_state.goal_latlon:
+    status2.success(f"✅ Goal set — {st.session_state.goal_latlon[0]:.5f}, {st.session_state.goal_latlon[1]:.5f}")
+else:
+    status2.warning("⬜ Goal not set")
+
+st.caption(f"Current click mode: **{st.session_state.mode}** — change it in the sidebar, then click the map.")
+
+center = [17.3850, 78.4867]
 if st.session_state.start_latlon:
     center = list(st.session_state.start_latlon)
 
 fmap = folium.Map(location=center, zoom_start=13, tiles="OpenStreetMap")
-
 if st.session_state.start_latlon:
-    folium.Marker(
-        st.session_state.start_latlon, tooltip="Start (Warehouse)",
-        icon=folium.Icon(color="green", icon="play"),
-    ).add_to(fmap)
-
+    folium.Marker(st.session_state.start_latlon, tooltip="Start (Warehouse)",
+                  icon=folium.Icon(color="green", icon="play")).add_to(fmap)
 if st.session_state.goal_latlon:
-    folium.Marker(
-        st.session_state.goal_latlon, tooltip="Goal (Customer)",
-        icon=folium.Icon(color="red", icon="flag"),
-    ).add_to(fmap)
+    folium.Marker(st.session_state.goal_latlon, tooltip="Goal (Customer)",
+                  icon=folium.Icon(color="red", icon="flag")).add_to(fmap)
 
-map_data = st_folium(fmap, height=450, use_container_width=True, key="picker_map")
+map_data = st_folium(fmap, height=430, use_container_width=True, key="picker_map")
 
 if map_data and map_data.get("last_clicked"):
     click = map_data["last_clicked"]
@@ -124,13 +145,9 @@ if map_data and map_data.get("last_clicked"):
             st.session_state.goal_latlon = (click["lat"], click["lng"])
         st.rerun()
 
-colA, colB = st.columns(2)
-colA.info(f"Start: {st.session_state.start_latlon or 'not set'}")
-colB.info(f"Goal: {st.session_state.goal_latlon or 'not set'}")
-
 
 # ---------------------------------------------------------------------------
-# Simulation
+# Simulation helpers
 # ---------------------------------------------------------------------------
 def build_environment(bounds, wind_vector, grid_start, grid_goal, add_obs):
     env = AirspaceEnvironment(bounds, wind_vector=wind_vector)
@@ -138,14 +155,10 @@ def build_environment(bounds, wind_vector, grid_start, grid_goal, add_obs):
         return env
 
     bx, by, bz = bounds
-    mid1 = (
-        int(grid_start[0] + (grid_goal[0] - grid_start[0]) * 0.33),
-        int(grid_start[1] + (grid_goal[1] - grid_start[1]) * 0.33),
-    )
-    mid2 = (
-        int(grid_start[0] + (grid_goal[0] - grid_start[0]) * 0.66),
-        int(grid_start[1] + (grid_goal[1] - grid_start[1]) * 0.66),
-    )
+    mid1 = (int(grid_start[0] + (grid_goal[0] - grid_start[0]) * 0.33),
+            int(grid_start[1] + (grid_goal[1] - grid_start[1]) * 0.33))
+    mid2 = (int(grid_start[0] + (grid_goal[0] - grid_start[0]) * 0.66),
+            int(grid_start[1] + (grid_goal[1] - grid_start[1]) * 0.66))
     span = max(2, bx // 15)
 
     env.add_static_building(
@@ -154,15 +167,12 @@ def build_environment(bounds, wind_vector, grid_start, grid_goal, add_obs):
     )
     env.add_no_fly_zone(
         center=(min(bx - 1, mid2[0]), min(by - 1, mid2[1]), 0),
-        radius=max(2, span),
-        height_range=(0, bz - 1),
+        radius=max(2, span), height_range=(0, bz - 1),
     )
-    env.dynamic_obstacles.append(
-        DynamicObstacle(start_pos=(min(bx - 1, mid1[0]), min(by - 1, mid1[1] + span), min(bz - 1, bz // 2)), velocity=(0, 1, 0))
-    )
-    env.dynamic_obstacles.append(
-        DynamicObstacle(start_pos=(min(bx - 1, mid2[0] + span), min(by - 1, mid2[1]), min(bz - 1, bz // 3)), velocity=(-1, 0, 0))
-    )
+    env.dynamic_obstacles.append(DynamicObstacle(
+        start_pos=(min(bx - 1, mid1[0]), min(by - 1, mid1[1] + span), min(bz - 1, bz // 2)), velocity=(0, 1, 0)))
+    env.dynamic_obstacles.append(DynamicObstacle(
+        start_pos=(min(bx - 1, mid2[0] + span), min(by - 1, mid2[1]), min(bz - 1, bz // 3)), velocity=(-1, 0, 0)))
     return env
 
 
@@ -171,44 +181,33 @@ def run_simulation(start_latlon, goal_latlon, start_alt_m, goal_alt_m):
     dx, dy = latlon_to_local(goal_latlon[0], goal_latlon[1], lat0, lon0)
     horiz_dist = max(math.hypot(dx, dy), 1.0)
 
-    # Scale real-world meters down to a tractable grid (~35 cells across the route)
     cell_size_m = max(horiz_dist / 35.0, 1.0)
-    z_cell_m = 5.0  # each vertical grid cell = 5 meters
-
+    z_cell_m = 5.0
     margin = 8
+
     gx_goal = int(round(dx / cell_size_m))
     gy_goal = int(round(dy / cell_size_m))
 
     grid_start = [margin, margin, int(round(start_alt_m / z_cell_m)) + margin]
-    grid_goal = [
-        margin + gx_goal,
-        margin + gy_goal,
-        int(round(goal_alt_m / z_cell_m)) + margin,
-    ]
-    # Shift both points so all coordinates stay non-negative
+    grid_goal = [margin + gx_goal, margin + gy_goal, int(round(goal_alt_m / z_cell_m)) + margin]
     if gx_goal < 0:
         grid_start[0] -= gx_goal
         grid_goal[0] -= gx_goal
     if gy_goal < 0:
         grid_start[1] -= gy_goal
         grid_goal[1] -= gy_goal
-    grid_start = tuple(grid_start)
-    grid_goal = tuple(grid_goal)
+    grid_start, grid_goal = tuple(grid_start), tuple(grid_goal)
 
-    bx = abs(gx_goal) + 2 * margin + 1
-    by = abs(gy_goal) + 2 * margin + 1
-    bz = max(grid_start[2], grid_goal[2]) + margin
-    bounds = (bx, by, bz)
+    bounds = (abs(gx_goal) + 2 * margin + 1, abs(gy_goal) + 2 * margin + 1,
+              max(grid_start[2], grid_goal[2]) + margin)
 
     env = build_environment(bounds, (wx, wy, wz), grid_start, grid_goal, add_obstacles)
     physics = DronePhysicsModel(base_weight=base_weight, payload_weight=payload_weight)
     heuristic = MultiFactorHeuristic(w_dist=w_dist, w_energy=w_energy, w_risk=w_risk)
 
     t0 = time.perf_counter()
-    macro_planner = AStar3DPlanner(env, physics, heuristic)
-    macro_path = macro_planner.plan_path(grid_start, grid_goal)
+    macro_path = AStar3DPlanner(env, physics, heuristic).plan_path(grid_start, grid_goal)
     planner_ms = (time.perf_counter() - t0) * 1000
-
     if not macro_path:
         return None
 
@@ -230,20 +229,25 @@ def run_simulation(start_latlon, goal_latlon, start_alt_m, goal_alt_m):
     total_distance = sum(
         np.linalg.norm(np.array(actual_path[i]) - np.array(actual_path[i - 1]))
         for i in range(1, len(actual_path))
-    ) * cell_size_m  # back to meters (approx.; ignores the separate z_cell_m scale)
+    ) * cell_size_m
 
-    def grid_to_geo(p):
-        gx, gy, gz = p
-        lx = (gx - grid_start[0]) * cell_size_m
-        ly = (gy - grid_start[1]) * cell_size_m
-        lat, lon = local_to_latlon(lx, ly, lat0, lon0)
-        alt_m = gz * z_cell_m
-        return lat, lon, alt_m
+    def grid_to_geo(x, y, z):
+        lat, lon = local_to_latlon((x - grid_start[0]) * cell_size_m, (y - grid_start[1]) * cell_size_m, lat0, lon0)
+        return lat, lon, z * z_cell_m
 
-    macro_geo = [grid_to_geo(p) for p in macro_path]
-    actual_geo = [grid_to_geo(p) for p in actual_path]
-    buildings_geo = [grid_to_geo((x, y, z)) for (x, y, z) in env.static_obstacles] if env.static_obstacles else []
-    obstacles_geo = [grid_to_geo(tuple(int(v) for v in obs.position)) for obs in env.dynamic_obstacles]
+    macro_geo = [grid_to_geo(*p) for p in macro_path]
+    actual_geo = [grid_to_geo(*p) for p in actual_path]
+
+    # Collapse building voxels into footprints (one extruded column per x,y, height = tallest voxel)
+    footprints = {}
+    for (x, y, z) in env.static_obstacles:
+        footprints[(x, y)] = max(footprints.get((x, y), -1), z)
+    buildings = []
+    for (x, y), top_z in footprints.items():
+        lat, lon, _ = grid_to_geo(x, y, 0)
+        buildings.append({"lat": lat, "lon": lon, "height_m": (top_z + 1) * z_cell_m})
+
+    obstacles_geo = [grid_to_geo(*[int(v) for v in obs.position]) for obs in env.dynamic_obstacles]
 
     metrics = {
         "success": actual_path[-1] == grid_goal,
@@ -252,69 +256,61 @@ def run_simulation(start_latlon, goal_latlon, start_alt_m, goal_alt_m):
         "planner_ms": planner_ms,
         "sim_ms": sim_ms,
         "waypoints": len(macro_path),
+        "max_alt_m": max(p[2] for p in actual_geo),
     }
-    return macro_geo, actual_geo, buildings_geo, obstacles_geo, metrics, cell_size_m
+    return macro_geo, actual_geo, buildings, obstacles_geo, metrics, cell_size_m
 
 
-def make_3d_deck(macro_geo, actual_geo, buildings_geo, obstacles_geo, start_latlon, goal_latlon, building_radius_m):
+def make_3d_deck(macro_geo, actual_geo, buildings, obstacles_geo, start_latlon, goal_latlon, building_radius_m):
     lat0, lon0 = start_latlon
 
-    path_layer_actual = pdk.Layer(
-        "PathLayer",
-        data=[{"path": [[lon, lat, alt] for lat, lon, alt in actual_geo]}],
-        get_path="path",
-        get_color=[220, 40, 40],
-        width_min_pixels=4,
-        pickable=True,
-    )
-    path_layer_macro = pdk.Layer(
-        "PathLayer",
-        data=[{"path": [[lon, lat, alt] for lat, lon, alt in macro_geo]}],
-        get_path="path",
-        get_color=[40, 90, 220],
-        width_min_pixels=2,
-        pickable=True,
-    )
-    markers = [
-        {"position": [start_latlon[1], start_latlon[0], 0], "color": [0, 160, 0]},
-        {"position": [goal_latlon[1], goal_latlon[0], 0], "color": [230, 180, 0]},
+    layers = [
+        pdk.Layer("PathLayer",
+                  data=[{"path": [[lon, lat, alt] for lat, lon, alt in macro_geo]}],
+                  get_path="path", get_color=[40, 90, 220], width_min_pixels=2),
+        pdk.Layer("PathLayer",
+                  data=[{"path": [[lon, lat, alt] for lat, lon, alt in actual_geo]}],
+                  get_path="path", get_color=[220, 40, 40], width_min_pixels=5),
     ]
-    marker_layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=markers,
-        get_position="position",
-        get_fill_color="color",
-        get_radius=15,
-        pickable=True,
-    )
 
-    layers = [path_layer_macro, path_layer_actual, marker_layer]
+    # Vertical "drop lines" from the flown path down to the ground so altitude is unambiguous
+    drop_lines = [
+        {"from": [lon, lat, alt], "to": [lon, lat, 0]}
+        for i, (lat, lon, alt) in enumerate(actual_geo) if i % 2 == 0 and alt > 0.5
+    ]
+    if drop_lines:
+        layers.append(pdk.Layer(
+            "LineLayer", data=drop_lines,
+            get_source_position="from", get_target_position="to",
+            get_color=[150, 150, 150, 120], get_width=1,
+        ))
 
-    if buildings_geo:
-        b_data = [{"position": [lon, lat], "elevation": max(alt, 10)} for lat, lon, alt in buildings_geo]
+    if buildings:
         layers.append(pdk.Layer(
             "ColumnLayer",
-            data=b_data,
-            get_position="position",
-            get_elevation="elevation",
-            elevation_scale=1,
-            radius=max(building_radius_m, 2),
-            get_fill_color=[130, 130, 130, 150],
-            pickable=False,
+            data=[{"position": [b["lon"], b["lat"]], "elevation": b["height_m"]} for b in buildings],
+            get_position="position", get_elevation="elevation", elevation_scale=1,
+            radius=max(building_radius_m * 0.9, 2),
+            get_fill_color=[120, 120, 130, 200], pickable=True, auto_highlight=True,
         ))
 
     if obstacles_geo:
-        o_data = [{"position": [lon, lat, alt]} for lat, lon, alt in obstacles_geo]
         layers.append(pdk.Layer(
             "ScatterplotLayer",
-            data=o_data,
-            get_position="position",
-            get_fill_color=[150, 0, 200],
-            get_radius=8,
+            data=[{"position": [lon, lat, alt]} for lat, lon, alt in obstacles_geo],
+            get_position="position", get_fill_color=[160, 0, 200], get_radius=8,
         ))
 
-    view_state = pdk.ViewState(latitude=lat0, longitude=lon0, zoom=14, pitch=55, bearing=20)
-    return pdk.Deck(layers=layers, initial_view_state=view_state, map_style=None)
+    layers.append(pdk.Layer(
+        "ScatterplotLayer",
+        data=[{"position": [start_latlon[1], start_latlon[0], 0], "color": [0, 170, 0]},
+              {"position": [goal_latlon[1], goal_latlon[0], 0], "color": [230, 180, 0]}],
+        get_position="position", get_fill_color="color", get_radius=15,
+    ))
+
+    view_state = pdk.ViewState(latitude=lat0, longitude=lon0, zoom=14.2, pitch=60, bearing=15)
+    return pdk.Deck(layers=layers, initial_view_state=view_state, map_style=None,
+                     tooltip={"text": "Building height: {elevation} m"})
 
 
 # ---------------------------------------------------------------------------
@@ -325,32 +321,37 @@ if run_button:
         st.error("Please set both a Start and a Goal point on the map first.")
     else:
         with st.spinner("Computing global path and simulating flight..."):
-            result = run_simulation(
-                st.session_state.start_latlon, st.session_state.goal_latlon, start_alt, goal_alt
-            )
+            result = run_simulation(st.session_state.start_latlon, st.session_state.goal_latlon, start_alt, goal_alt)
 
         if result is None:
             st.error("Global path planner failed to find a valid trajectory between start and goal.")
         else:
-            macro_geo, actual_geo, buildings_geo, obstacles_geo, metrics, cell_size_m = result
+            macro_geo, actual_geo, buildings, obstacles_geo, metrics, cell_size_m = result
 
-            st.subheader("2. Results")
+            st.subheader("2️⃣ Results — 3D Flight View")
             c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("Delivery", "SUCCESS" if metrics["success"] else "FAILED")
             c2.metric("Flight Distance", f"{metrics['distance_m']:.1f} m")
-            c3.metric("Energy Consumed", f"{metrics['energy']:.2f} J")
-            c4.metric("Planner Time", f"{metrics['planner_ms']:.2f} ms")
-            c5.metric("Waypoints", metrics["waypoints"])
+            c3.metric("Max Altitude", f"{metrics['max_alt_m']:.0f} m")
+            c4.metric("Energy Consumed", f"{metrics['energy']:.2f} J")
+            c5.metric("Planner Time", f"{metrics['planner_ms']:.2f} ms")
 
-            deck = make_3d_deck(
-                macro_geo, actual_geo, buildings_geo, obstacles_geo,
-                st.session_state.start_latlon, st.session_state.goal_latlon,
-                building_radius_m=cell_size_m,
-            )
+            deck = make_3d_deck(macro_geo, actual_geo, buildings, obstacles_geo,
+                                 st.session_state.start_latlon, st.session_state.goal_latlon,
+                                 building_radius_m=cell_size_m)
             st.pydeck_chart(deck, use_container_width=True)
-            st.caption(
-                "Blue = planned A* path · Red = actual flown path (with reactive avoidance) · "
-                "Gray columns = buildings · Purple dots = moving obstacles"
+
+            st.markdown(
+                """
+                <span class="legend-dot" style="background:#2858DC"></span>Planned A* path&nbsp;&nbsp;
+                <span class="legend-dot" style="background:#DC2828"></span>Actual flown path&nbsp;&nbsp;
+                <span class="legend-dot" style="background:#787882"></span>Buildings (true height)&nbsp;&nbsp;
+                <span class="legend-dot" style="background:#A000C8"></span>Moving obstacles&nbsp;&nbsp;
+                <span class="legend-dot" style="background:#00AA00"></span>Start&nbsp;&nbsp;
+                <span class="legend-dot" style="background:#E6B400"></span>Goal
+                """,
+                unsafe_allow_html=True,
             )
+            st.caption("Drag to rotate/tilt the map. Thin gray lines drop straight down from the flight path to the ground so altitude is easy to read at a glance.")
 else:
-    st.info("Set Start and Goal on the map above, then click **Run Simulation** in the sidebar.")
+    st.info("Set Start and Goal on the map above, then click **🚀 Run Simulation** in the sidebar.")
