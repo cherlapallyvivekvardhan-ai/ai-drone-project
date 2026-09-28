@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drone Mission Platform</title>
+<style>
+:root {
+  --paper: #eff3ee; --panel: #e4ebe5; --ink: #17262e; --muted: #56676d;
+  --grid: #cbd7d1; --route: #0e7c7b; --hazard: #c77d0a; --dest: #b3261e;
+  --alt: #6b5b95; --line: #b8c6bf;
+  --serif: Charter, "Bitstream Charter", "Iowan Old Style", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.45 var(--sans); }
+header { padding: 18px 28px 14px; border-bottom: 1px solid var(--line); }
+h1 { margin: 0; font: 600 26px/1.15 var(--serif); letter-spacing: -.01em; }
+header p { margin: 4px 0 0; color: var(--muted); max-width: 62ch; }
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 0; }
+aside { padding: 20px 24px 28px; background: var(--panel); border-right: 1px solid var(--line); }
+main { padding: 20px 28px 32px; min-width: 0; }
+h2 { font: 600 16px var(--serif); margin: 22px 0 8px; }
+h2:first-child { margin-top: 0; }
+.tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+button, select, input[type=number] {
+  font: inherit; color: var(--ink); background: var(--paper);
+  border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; width: 100%;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--ink); }
+button[aria-pressed=true] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+button.primary { background: var(--route); border-color: var(--route); color: #fff; font-weight: 600; margin-top: 8px; }
+button.primary:hover { background: #0a6362; }
+button.quiet { margin-top: 6px; }
+:focus-visible { outline: 3px solid #1d6fd8; outline-offset: 2px; }
+label.row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+label.row input { width: auto; }
+.field { margin-top: 10px; } .field > span { display: block; margin-bottom: 4px; }
+.hint { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+.stage { position: relative; max-width: 780px; }
+canvas { display: block; width: 100%; aspect-ratio: 1; background: var(--paper);
+  border: 1px solid var(--ink); cursor: crosshair; touch-action: none; }
+#status { margin: 12px 0 0; min-height: 22px; }
+#status.err { color: var(--dest); font-weight: 600; }
+#readout { color: var(--muted); font-size: 13px; margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 12px 0 0; color: var(--muted); font-size: 13px; }
+.legend i { display: inline-block; width: 22px; height: 0; border-top: 3px solid; vertical-align: middle; margin-right: 6px; }
+table { border-collapse: collapse; margin-top: 18px; width: 100%; max-width: 780px; font-variant-numeric: tabular-nums; }
+caption { text-align: left; font: 600 16px var(--serif); padding-bottom: 6px; }
+th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+th:first-child, td:first-child { text-align: left; }
+thead th { border-bottom: 2px solid var(--ink); font-weight: 600; }
+td.best { font-weight: 700; color: var(--route); }
+@media (max-width: 820px) { .layout { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } main { padding: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Drone mission platform</h1>
+  <p>Place a start and destination, draw no-fly zones, and let A* or Dijkstra plan the shortest safe route.</p>
+</header>
+
+<div class="layout">
+<aside>
+  <h2>Map tool</h2>
+  <div class="tools" role="group" aria-label="Map tool">
+    <button data-tool="start" aria-pressed="false">Set start</button>
+    <button data-tool="dest" aria-pressed="false">Set destination</button>
+    <button data-tool="draw" aria-pressed="true">Draw zone</button>
+    <button data-tool="erase" aria-pressed="false">Erase zone</button>
+  </div>
+  <p class="hint">Click or drag on the map. The route updates when you change anything.</p>
+
+  <h2>Mission</h2>
+  <label class="field"><span>Algorithm</span>
+    <select id="algorithm">
+      <option value="astar">A* (guided search)</option>
+      <option value="dijkstra">Dijkstra (baseline)</option>
+    </select></label>
+  <label class="field"><span>Drone speed (m/s)</span>
+    <input id="speed" type="number" min="1" value="10"></label>
+  <label class="row"><input id="smooth" type="checkbox" checked> Straighten route</label>
+  <label class="row"><input id="showExplored" type="checkbox" checked> Show searched cells</label>
+  <button class="primary" id="fly">Plan and fly route</button>
+  <button class="quiet" id="compare">Compare A* and Dijkstra</button>
+
+  <h2>Zones</h2>
+  <button id="loadDefault">Load city layout</button>
+  <button class="quiet" id="random">Random zones</button>
+  <button class="quiet" id="clear">Clear all zones</button>
+  <p class="hint">One cell is 10 m.</p>
+</aside>
+
+<main>
+  <div class="stage"><canvas id="map" width="1000" height="1000" aria-label="Mission map"></canvas></div>
+  <p id="readout">Move over the map to see coordinates.</p>
+  <p id="status" role="status">Loading map…</p>
+  <div class="legend">
+    <span><i style="border-color:var(--hazard)"></i>No-fly zone</span>
+    <span><i style="border-color:var(--route)"></i>A* route</span>
+    <span><i style="border-color:var(--alt);border-top-style:dashed"></i>Dijkstra route</span>
+    <span><i style="border-color:#9fc9c2"></i>Searched cells</span>
+  </div>
+  <table id="results" hidden>
+    <caption>Route results</caption>
+    <thead><tr><th></th><th>Distance (m)</th><th>Flight time (s)</th><th>Waypoints</th><th>Cells searched</th><th>Compute (ms)</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</main>
+</div>
+
+<script>
+const N = 50;
+const cv = document.getElementById("map"), ctx = cv.getContext("2d");
+const CELL = cv.width / N;
+const $ = id => document.getElementById(id);
+const state = { blocked: new Set(), start: {x: 4, y: 4}, dest: {x: 44, y: 44},
+                tool: "draw", results: null, drone: null, anim: 0 };
+const key = (x, y) => x + "," + y;
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ---------- drawing ---------- */
+function hatch() {
+  const c = document.createElement("canvas"); c.width = c.height = 10;
+  const g = c.getContext("2d");
+  g.fillStyle = "rgba(199,125,10,.22)"; g.fillRect(0, 0, 10, 10);
+  g.strokeStyle = "#c77d0a"; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(-2, 12); g.lineTo(12, -2); g.stroke();
+  return ctx.createPattern(c, "repeat");
+}
+const HATCH = hatch();
+const px = c => (c + .5) * CELL;
+
+function polyline(route, color, dash, width) {
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash);
+  ctx.lineJoin = "round"; ctx.beginPath();
+  route.forEach((p, i) => i ? ctx.lineTo(px(p.x), px(p.y)) : ctx.moveTo(px(p.x), px(p.y)));
+  ctx.stroke(); ctx.setLineDash([]);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.strokeStyle = "#cbd7d1"; ctx.lineWidth = 1; ctx.beginPath();
+  for (let i = 0; i <= N; i++) {
+    ctx.moveTo(i * CELL, 0); ctx.lineTo(i * CELL, cv.height);
+    ctx.moveTo(0, i * CELL); ctx.lineTo(cv.width, i * CELL);
+  }
+  ctx.stroke();
+
+  const r = state.results;
+  const primary = r && (r[$("algorithm").value] || r.astar);
+  if (primary && $("showExplored").checked) {
+    ctx.fillStyle = "rgba(14,124,123,.16)";
+    primary.explored.forEach(p => ctx.fillRect(p.x * CELL, p.y * CELL, CELL, CELL));
+  }
+  ctx.fillStyle = HATCH;
+  state.blocked.forEach(k => { const [x, y] = k.split(",").map(Number);
+    ctx.fillRect(x * CELL, y * CELL, CELL, CELL); });
+  ctx.strokeStyle = "#c77d0a"; ctx.lineWidth = 1.5;
+  state.blocked.forEach(k => { const [x, y] = k.split(",").map(Number);
+    if (!state.blocked.has(key(x + 1, y))) line(x + 1, y, x + 1, y + 1);
+    if (!state.blocked.has(key(x - 1, y))) line(x, y, x, y + 1);
+    if (!state.blocked.has(key(x, y + 1))) line(x, y + 1, x + 1, y + 1);
+    if (!state.blocked.has(key(x, y - 1))) line(x, y, x + 1, y); });
+
+  if (r) {
+    if (r.dijkstra && r.astar) {
+      polyline(r.dijkstra.route, "#6b5b95", [14, 10], 5);
+      polyline(r.astar.route, "#0e7c7b", [], 6);
+    } else polyline(primary.route, "#0e7c7b", [], 6);
+    ctx.fillStyle = "#fff"; ctx.strokeStyle = "#0e7c7b"; ctx.lineWidth = 3;
+    primary.route.slice(1, -1).forEach(p => { ctx.beginPath();
+      ctx.arc(px(p.x), px(p.y), 5, 0, 7); ctx.fill(); ctx.stroke(); });
+  }
+  marker(state.start, "#17262e", "S"); marker(state.dest, "#b3261e", "D");
+  if (state.drone) drone(state.drone);
+}
+function line(a, b, c, d) { ctx.beginPath(); ctx.moveTo(a * CELL, b * CELL); ctx.lineTo(c * CELL, d * CELL); ctx.stroke(); }
+function marker(p, color, letter) {
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(px(p.x), px(p.y), 15, 0, 7); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.font = "bold 16px system-ui"; ctx.textAlign = "center";
+  ctx.textBaseline = "middle"; ctx.fillText(letter, px(p.x), px(p.y) + 1);
+}
+function drone(p) {  // small quadcopter glyph
+  const x = px(p.x), y = px(p.y);
+  ctx.save(); ctx.translate(x, y);
+  ctx.strokeStyle = "#17262e"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(-13, -13); ctx.lineTo(13, 13); ctx.moveTo(13, -13); ctx.lineTo(-13, 13); ctx.stroke();
+  ctx.fillStyle = "#eff3ee";
+  [[-13, -13], [13, -13], [-13, 13], [13, 13]].forEach(([a, b]) => { ctx.beginPath(); ctx.arc(a, b, 7, 0, 7); ctx.fill(); ctx.stroke(); });
+  ctx.fillStyle = "#17262e"; ctx.beginPath(); ctx.arc(0, 0, 6, 0, 7); ctx.fill(); ctx.restore();
+}
+
+/* ---------- API ---------- */
+function payload() {
+  return { start: state.start, destination: state.dest, width: N, height: N,
+    obstacles: [...state.blocked].map(k => { const [x, y] = k.split(",").map(Number); return {x, y}; }),
+    algorithm: $("algorithm").value, drone_speed: Number($("speed").value),
+    smooth: $("smooth").checked };
+}
+async function post(url) {
+  const res = await fetch(url, { method: "POST", headers: {"Content-Type": "application/json"},
+                                 body: JSON.stringify(payload()) });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error || "Request failed.");
+  return data;
+}
+function setStatus(msg, err) { const s = $("status"); s.textContent = msg; s.className = err ? "err" : ""; }
+
+async function plan(animate = true) {
+  cancelAnimationFrame(state.anim); state.drone = null;
+  setStatus("Planning route…");
+  try {
+    const d = await post("/api/plan-route");
+    state.results = { [d.algorithm]: d };
+    showTable([d]); draw();
+    setStatus(`Route found: ${d.distance_m} m, about ${d.flight_time} s.`);
+    if (animate) fly(d.route, d.distance);
+  } catch (e) { state.results = null; $("results").hidden = true; draw(); setStatus(e.message, true); }
+}
+async function compare() {
+  cancelAnimationFrame(state.anim); state.drone = null;
+  setStatus("Comparing algorithms…");
+  try {
+    const d = await post("/api/compare");
+    state.results = d.results;
+    showTable([d.results.astar, d.results.dijkstra]); draw();
+    const a = d.results.astar, j = d.results.dijkstra;
+    setStatus(`A* searched ${a.expanded} cells; Dijkstra searched ${j.expanded}.`);
+  } catch (e) { state.results = null; $("results").hidden = true; draw(); setStatus(e.message, true); }
+}
+function showTable(rows) {
+  const names = { astar: "A*", dijkstra: "Dijkstra" };
+  const fields = ["distance_m", "flight_time", "waypoints", "expanded", "compute_ms"];
+  const best = f => Math.min(...rows.map(r => r[f]));
+  $("results").hidden = false;
+  $("results").querySelector("tbody").innerHTML = rows.map(r =>
+    `<tr><td>${names[r.algorithm]}</td>` + fields.map(f =>
+      `<td class="${rows.length > 1 && r[f] === best(f) ? "best" : ""}">${r[f]}</td>`).join("") + "</tr>").join("");
+}
+
+/* ---------- drone flight animation ---------- */
+function fly(route, cells) {
+  if (reduceMotion || route.length < 2) { state.drone = route[route.length - 1]; draw(); return; }
+  const dur = Math.min(5000, 900 + cells * 90), t0 = performance.now();
+  const seg = route.slice(1).map((p, i) => Math.hypot(p.x - route[i].x, p.y - route[i].y));
+  const total = seg.reduce((a, b) => a + b, 0);
+  (function step(now) {
+    let d = Math.min(1, (now - t0) / dur) * total, i = 0;
+    while (i < seg.length - 1 && d > seg[i]) { d -= seg[i]; i++; }
+    const t = seg[i] ? d / seg[i] : 1, a = route[i], b = route[i + 1];
+    state.drone = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    draw();
+    if (now - t0 < dur) state.anim = requestAnimationFrame(step);
+  })(t0);
+}
+
+/* ---------- map editing ---------- */
+function cellAt(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: Math.min(N - 1, Math.max(0, Math.floor((e.clientX - r.left) / r.width * N))),
+           y: Math.min(N - 1, Math.max(0, Math.floor((e.clientY - r.top) / r.height * N))) };
+}
+let painting = false, changed = false, timer;
+function apply(c) {
+  const k = key(c.x, c.y);
+  if (state.tool === "start") { state.blocked.delete(k); state.start = c; changed = true; }
+  else if (state.tool === "dest") { state.blocked.delete(k); state.dest = c; changed = true; }
+  else if (state.tool === "draw") {
+    const isEnd = (c.x === state.start.x && c.y === state.start.y) || (c.x === state.dest.x && c.y === state.dest.y);
+    if (!isEnd && !state.blocked.has(k)) { state.blocked.add(k); changed = true; }
+  } else if (state.blocked.delete(k)) changed = true;
+}
+cv.addEventListener("pointerdown", e => { cv.setPointerCapture(e.pointerId); painting = true; changed = false; apply(cellAt(e)); afterEdit(false); });
+cv.addEventListener("pointermove", e => {
+  const c = cellAt(e); $("readout").textContent = `Cell (${c.x}, ${c.y})` + (state.blocked.has(key(c.x, c.y)) ? " - no-fly zone" : "");
+  if (painting && (state.tool === "draw" || state.tool === "erase")) { apply(c); afterEdit(false); }
+});
+cv.addEventListener("pointerup", () => { painting = false; if (changed) afterEdit(true); });
+function afterEdit(commit) {
+  if (!commit) { draw(); return; }
+  clearTimeout(timer); timer = setTimeout(() => plan(false), 120);
+}
+
+document.querySelectorAll("[data-tool]").forEach(b => b.addEventListener("click", () => {
+  state.tool = b.dataset.tool;
+  document.querySelectorAll("[data-tool]").forEach(o => o.setAttribute("aria-pressed", o === b));
+}));
+$("fly").onclick = () => plan(true);
+$("compare").onclick = compare;
+$("algorithm").onchange = () => plan(false);
+$("smooth").onchange = () => plan(false);
+$("speed").onchange = () => plan(false);
+$("showExplored").onchange = draw;
+$("clear").onclick = () => { state.blocked.clear(); plan(false); };
+$("random").onclick = () => {
+  state.blocked.clear();
+  for (let i = 0; i < 14; i++) {
+    const w = 2 + Math.floor(Math.random() * 5), h = 2 + Math.floor(Math.random() * 5);
+    const x0 = Math.floor(Math.random() * (N - w)), y0 = Math.floor(Math.random() * (N - h));
+    for (let x = x0; x < x0 + w; x++) for (let y = y0; y < y0 + h; y++) state.blocked.add(key(x, y));
+  }
+  state.blocked.delete(key(state.start.x, state.start.y)); state.blocked.delete(key(state.dest.x, state.dest.y));
+  plan(false);
+};
+async function loadDefault() {
+  try {
+    const z = await (await fetch("/api/default-zones")).json();
+    state.blocked = new Set(z.obstacles.map(o => key(o.x, o.y)));
+    if (z.start) state.start = z.start; if (z.destination) state.dest = z.destination;
+    await plan(false);
+  } catch { setStatus("Could not load the city layout. Is the server running?", true); }
+}
+$("loadDefault").onclick = loadDefault;
+loadDefault();
+</script>
+</body>
+</html>
