@@ -1,0 +1,16 @@
+{
+    "description": "Defaults for the Streamlit app. zone_layout places each no-fly cylinder at fraction t along the A->B line, pushed sideways by offset x radius.",
+    "default_addresses": {
+        "start": "Cyber Towers, HITEC City, Hyderabad",
+        "destination": "Inorbit Mall, Madhapur, Hyderabad"
+    },
+    "demo": {
+        "origin": [78.3800, 17.4435],
+        "goal_m": [850, 350]
+    },
+    "zone_layout": [
+        {"name": "Alpha", "t": 0.30, "offset": 0.0},
+        {"name": "Bravo", "t": 0.58, "offset": 0.7},
+        {"name": "Charlie", "t": 0.80, "offset": -0.6}
+    ]
+}
