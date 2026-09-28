@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js"></script>
+<style>/*STYLE*/</style></head><body>
+<div id="map"></div><div id="mini"></div>
+<aside id="panel">
+  <h1>🚁 AI Drone Path Planner</h1>
+  <label>Start (Point A)</label><input id="a">
+  <label>Destination (Point B)</label><input id="b">
+  <button id="plan">Plan Route</button>
+  <div class="row"><button id="fly" disabled>▶ Fly Drone</button><button id="cam" disabled>View: Orbit</button></div>
+  <div id="status">Enter two addresses and press Plan Route.</div>
+  <h2>AI Path Dashboard</h2>
+  <div class="grid">
+    <div><b id="m-dist">–</b><span>Distance</span></div><div><b id="m-time">–</b><span>Flight time</span></div>
+    <div><b id="m-batt">–</b><span>Battery use</span></div><div><b id="m-clear">–</b><span>Safety score</span></div>
+  </div>
+  <h2>AI Explainer Log</h2><ol id="log"></ol>
+</aside>
+<script>/*PLANNER*/</script><script>/*APP*/</script>
+</body></html>
